@@ -1,3 +1,6 @@
+WIP!!
+Created 90% with copilot, may be broken, may be very bloated, but it mostly functons. 
+
 # Stable Diffusion Model Sorter & Deduplicator
 
 A comprehensive Python pipeline for organizing, deduplicating, and managing stable diffusion model files with intelligent metadata handling and advanced version detection.
