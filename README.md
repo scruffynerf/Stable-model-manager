@@ -1,5 +1,6 @@
 WIP!!
 Created 90% with copilot, may be broken, may be very bloated, but it mostly functons. 
+You need to provide your own model database for the main model repository and information.
 
 # Stable Diffusion Model Sorter & Deduplicator
 
