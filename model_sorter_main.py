@@ -753,10 +753,10 @@ class ModelSorterOrchestrator:
                 
                 if not actual_model_path:
                     if self.verbose:
-                        print(f"   ⚠️ Model file not found in database path or target directory")
+                        print(f"   ⚠️ Model file not found in database path or destination directory")
                         print(f"      Database path checked: {model_path}")
-                        target_dir = self.scanner.config.get('target_directory', 'Not configured')
-                        print(f"      Target directory searched: {target_dir}")
+                        dest_dir = self.scanner.config.get('destination_directory', 'Not configured')
+                        print(f"      Destination directory searched: {dest_dir}")
                     continue
                 elif actual_model_path != model_path:
                     if self.verbose:
@@ -913,17 +913,18 @@ class ModelSorterOrchestrator:
                         if self.verbose:
                             print(f"   ✓ Advanced correlation match: {assoc_name}")
                     
-                    # METHOD 1.5: Enhanced content-based correlation for files not caught by basic correlation
-                    elif not should_link and model_sha256:
-                        correlation_result = self._analyze_content_correlation(
-                            assoc_path, assoc_name, model_name, model_sha256, model_autov3 or ""
+                    # METHOD 1.5: Enhanced content-based correlation (ALWAYS check for metadata files and media)
+                    content_correlation_result = None
+                    if assoc_name.lower().endswith(('.json', '.txt', '.md', '.yml', '.yaml', '.metadata.json', '.civitai.info', '.mp4', '.webp', '.png', '.jpg', '.jpeg')):
+                        content_correlation_result = self._analyze_content_correlation(
+                            assoc_path, assoc_name, model_name, model_sha256 or "", model_autov3 or ""
                         )
-                        if correlation_result['should_link']:
+                        if content_correlation_result['should_link'] and not should_link:
                             should_link = True
-                            match_reason = f"Content correlation ({correlation_result['reason']})"
+                            match_reason = f"Content correlation ({content_correlation_result['reason']})"
                             if self.verbose:
                                 print(f"   ✓ Content correlation match: {assoc_name}")
-                                print(f"      Reason: {correlation_result['details']}")
+                                print(f"      Reason: {content_correlation_result['details']}")
                     
                     # METHOD 2: Adaptive filename matching - version-aware or base name
                     elif not should_link:
@@ -1004,37 +1005,72 @@ class ModelSorterOrchestrator:
                                     if self.verbose:
                                         print(f"   ⚠️ Database search error: {e}")
                             
-                            # If file found, perform content correlation to confirm relationship
-                            if target_file_found and target_file_path and model_sha256:
-                                correlation_result = self._analyze_content_correlation(
-                                    target_file_path, assoc_name, model_name, model_sha256, model_autov3 or ""
-                                )
+                            # If file found, use previously computed correlation or perform new analysis
+                            if target_file_found and target_file_path:
+                                # Use existing correlation result if available, otherwise analyze
+                                if content_correlation_result is not None:
+                                    correlation_result = content_correlation_result
+                                elif model_sha256:
+                                    correlation_result = self._analyze_content_correlation(
+                                        target_file_path, assoc_name, model_name, model_sha256, model_autov3 or ""
+                                    )
+                                else:
+                                    correlation_result = {'should_link': False, 'reason': 'no_hash', 'details': 'No model hash available'}
+                                
                                 if correlation_result['should_link']:
                                     should_link = True
                                     match_reason = f"Base name + target search + content correlation ({correlation_result['reason']})"
                                     if self.verbose:
-                                        print(f"   ✓ Base name + target search match: {assoc_name}")
+                                        print(f"   ✓ Base name + target search + content correlation: {assoc_name}")
                                         print(f"      Found at: {target_file_path}")
                                         print(f"      Correlation: {correlation_result['details']}")
                                     # Update the assoc_path to point to the found file
                                     assoc_path = target_file_path
                                 elif target_file_found:
-                                    # Base name matches and file exists, but content doesn't correlate strongly
-                                    # Still link it as it's likely related (same base name is significant)
-                                    should_link = True
-                                    match_reason = "Base name + target search (weak content correlation)"
-                                    if self.verbose:
-                                        print(f"   ✓ Base name + target search match (weak correlation): {assoc_name}")
-                                        print(f"      Found at: {target_file_path}")
-                                    # Update the assoc_path to point to the found file
-                                    assoc_path = target_file_path
+                                    # Base name matches and file exists - check if we should link based on content quality
+                                    confidence_score = correlation_result.get('confidence_score', 0)
+                                    if confidence_score >= 30:  # Moderate confidence threshold
+                                        should_link = True
+                                        match_reason = f"Base name + target search + moderate correlation (score: {confidence_score})"
+                                        if self.verbose:
+                                            print(f"   ✓ Base name + target search + moderate correlation: {assoc_name}")
+                                            print(f"      Found at: {target_file_path}")
+                                            print(f"      Confidence: {confidence_score}% - {correlation_result['details']}")
+                                        # Update the assoc_path to point to the found file
+                                        assoc_path = target_file_path
+                                    else:
+                                        if self.verbose:
+                                            print(f"   ⚠️ Base name matches but low content correlation: {assoc_name}")
+                                            print(f"      Found at: {target_file_path}")
+                                            print(f"      Low confidence: {confidence_score}% - {correlation_result['details']}")
+                            
+                            # Even if file not found in target, check if we have strong content correlation from current location
+                            elif not target_file_found and content_correlation_result and content_correlation_result['should_link']:
+                                should_link = True
+                                match_reason = f"Base name + strong content correlation ({content_correlation_result['reason']})"
+                                if self.verbose:
+                                    print(f"   ✓ Base name + strong content correlation: {assoc_name}")
+                                    print(f"      Correlation: {content_correlation_result['details']}")
                     
-                    # METHOD 3: Basic exact name match (fallback)
+                    # METHOD 3: Enhanced exact name match (with content correlation support)
                     elif assoc_base_name == model_base_name:
-                        should_link = True
-                        match_reason = "Exact name match"
-                        if self.verbose:
-                            print(f"   ✓ Exact name match: {assoc_name}")
+                        # For documentation/metadata files with exact name matches, use content correlation to boost confidence
+                        if (content_correlation_result and content_correlation_result.get('confidence_score', 0) >= 50) or assoc_name.lower().endswith(('.md', '.txt', '.json', '.yml', '.yaml', '.civitai.info')):
+                            should_link = True
+                            if content_correlation_result and content_correlation_result['should_link']:
+                                match_reason = f"Exact name + content correlation ({content_correlation_result['reason']})"
+                                if self.verbose:
+                                    print(f"   ✓ Exact name + content correlation match: {assoc_name}")
+                                    print(f"      Correlation: {content_correlation_result['details']}")
+                            else:
+                                match_reason = "Exact name match (documentation file)"
+                                if self.verbose:
+                                    print(f"   ✓ Exact name match (documentation): {assoc_name}")
+                        else:
+                            should_link = True
+                            match_reason = "Exact name match"
+                            if self.verbose:
+                                print(f"   ✓ Exact name match: {assoc_name}")
                     
                     # METHOD 4: Single model scenario (fallback)
                     elif len(models_needing_associations) == 1:  # Only one model in this batch
@@ -1759,6 +1795,20 @@ class ModelSorterOrchestrator:
             
             file_ext = os.path.splitext(file_path)[1].lower()
             
+            # PRIORITY CHECK: Exact base filename match for documentation files
+            model_base = os.path.splitext(model_name)[0].lower()
+            file_base = os.path.splitext(file_name)[0].lower()
+            
+            if (file_base == model_base and 
+                file_ext in ['.md', '.txt', '.json', '.yml', '.yaml', '.civitai.info']):
+                result.update({
+                    'should_link': True,
+                    'reason': 'exact_filename_match',
+                    'details': f'Exact filename match: {file_base} == {model_base}',
+                    'confidence_score': 95
+                })
+                return result
+            
             # METHOD 1: Deep image metadata analysis
             if file_ext in ['.png', '.jpg', '.jpeg', '.webp']:
                 try:
@@ -1827,15 +1877,15 @@ class ModelSorterOrchestrator:
                         print(f"    Warning: Error analyzing image metadata for {file_name}: {e}")
             
             # METHOD 2: Enhanced text/metadata file analysis
-            elif file_ext in ['.json', '.txt', '.metadata.json']:
+            elif file_ext in ['.json', '.txt', '.md', '.yml', '.yaml', '.metadata.json', '.civitai.info']:
                 try:
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read()
                     
                     content_lower = content.lower()
                     
-                    # Direct hash reference (highest confidence)
-                    if model_sha256.lower() in content_lower or (model_autov3 and model_autov3.lower() in content_lower):
+                    # Direct hash reference (highest confidence) - only if hash available
+                    if model_sha256 and (model_sha256.lower() in content_lower or (model_autov3 and model_autov3.lower() in content_lower)):
                         result.update({
                             'should_link': True,
                             'reason': 'direct_hash_reference',
@@ -1853,18 +1903,19 @@ class ModelSorterOrchestrator:
                             model_fields = ['model_name', 'name', 'title', 'filename', 'base_model']
                             hash_fields = ['sha256', 'model_hash', 'hash', 'hashes']
                             
-                            # Check structured hash fields
-                            for field in hash_fields:
-                                if field in json_data:
-                                    field_value = str(json_data[field]).lower()
-                                    if model_sha256.lower() in field_value or (model_autov3 and model_autov3.lower() in field_value):
-                                        result.update({
-                                            'should_link': True,
-                                            'reason': f'structured_hash_{field}',
-                                            'details': f'Hash match in JSON field "{field}"',
-                                            'confidence_score': 95
-                                        })
-                                        return result
+                            # Check structured hash fields (only if hashes available)
+                            if model_sha256:
+                                for field in hash_fields:
+                                    if field in json_data:
+                                        field_value = str(json_data[field]).lower()
+                                        if model_sha256.lower() in field_value or (model_autov3 and model_autov3.lower() in field_value):
+                                            result.update({
+                                                'should_link': True,
+                                                'reason': f'structured_hash_{field}',
+                                                'details': f'Hash match in JSON field "{field}"',
+                                                'confidence_score': 95
+                                            })
+                                            return result
                             
                             # Check model identifier fields with enhanced matching
                             import re
@@ -1988,19 +2039,19 @@ class ModelSorterOrchestrator:
         
         # If not found, search in target directory structure
         try:
-            target_directory = self.scanner.config.get('target_directory', '')
+            target_directory = self.scanner.config.get('destination_directory', '')
             if not target_directory:
                 if self.verbose:
-                    print(f"      No target directory configured in config.ini")
+                    print(f"      No destination directory configured in config.ini")
                 return ""
             
             if not os.path.exists(target_directory):
                 if self.verbose:
-                    print(f"      Target directory does not exist: {target_directory}")
+                    print(f"      Destination directory does not exist: {target_directory}")
                 return ""
             
             if self.verbose:
-                print(f"      Searching target directory: {target_directory}")
+                print(f"      Searching destination directory: {target_directory}")
             
             # Search for the model file in the target directory structure
             model_filename = os.path.basename(database_path)

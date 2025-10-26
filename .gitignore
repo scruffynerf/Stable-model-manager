@@ -168,6 +168,9 @@ docs/_build/
 !sample_media/
 !sample_metadata/
 
+# Test directories and temporary files
+test-md/
+
 # Exclude actual model files from test-scripts (too large, users can use their own)
 test-scripts/*.safetensors
 test-scripts/*.ckpt  

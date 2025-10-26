@@ -4179,9 +4179,13 @@ class FileScanner:
             except:
                 return fallback
         
+        # Get destination directory and provide alias for backwards compatibility
+        dest_dir = get_config_value('Paths', 'destination_directory', './models')
+        
         return {
             'source_directory': get_config_value('Paths', 'source_directory', 'example-models'),
-            'destination_directory': get_config_value('Paths', 'destination_directory', './models'),
+            'destination_directory': dest_dir,
+            'target_directory': dest_dir,  # Alias for backwards compatibility
             'database_path': get_config_value('Paths', 'database_path', 'Database/file_scanner.sqlite'),
             'model_extensions': self.MODEL_EXTENSIONS,
             'related_extensions': set(ext.strip() for ext in 
